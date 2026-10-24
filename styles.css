@@ -141,7 +141,7 @@ nav.tabs button[aria-current="page"] .bg{fill:var(--rosa-md)}
 nav.tabs .plus{transform:translateY(-16px)}
 nav.tabs .plus span{width:60px;height:60px;border-radius:50%;background:var(--rosa);border:2.5px solid var(--tinta);box-shadow:2px 3px 0 var(--tinta);display:grid;place-items:center}
 /* folha de baixo */
-.veu{position:fixed;inset:0;background:rgba(61,54,52,.38);z-index:30}
+.veu{position:fixed;inset:0;background:rgba(61,54,52,.10);z-index:30}
 .sheet{position:fixed;left:0;right:0;bottom:0;z-index:31;max-height:92%;overflow:auto;-webkit-overflow-scrolling:touch;background:var(--papel);border-top:2.5px solid var(--tinta);border-radius:26px 26px 0 0;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
   padding-top:10px;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px))}
@@ -163,3 +163,5 @@ nav.tabs .plus span{width:60px;height:60px;border-radius:50%;background:var(--ro
 .add{border:2px dashed var(--tinta);border-radius:14px;background:none;padding:11px;font-weight:800;width:100%}
 .sim-nao{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .mini{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--tinta-2)}
+.nm-btn{background:none;border:none;padding:0;text-align:left;font:inherit;color:inherit;font-weight:700;cursor:pointer}
+.sheet{box-shadow:0 -6px 24px rgba(61,54,52,.12)}
