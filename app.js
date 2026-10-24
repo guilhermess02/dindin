@@ -90,6 +90,7 @@ function dbLocal() {
     delLanc(id) { S.lanc = S.lanc.filter(x => x.id !== id); salvar(); emitir(); },
     addParc(p) { p.id = novoId(); S.parc.push(p); salvar(); emitir(); },
     delParc(id) { S.parc = S.parc.filter(x => x.id !== id); salvar(); emitir(); },
+    updParc(id, p) { const i = S.parc.findIndex(x => x.id === id); if (i >= 0) S.parc[i] = { ...p, id }; salvar(); emitir(); },
     async sair() { try { localStorage.removeItem(K); } catch {} location.reload(); }
   };
 }
@@ -152,6 +153,7 @@ async function dbFirebase() {
     delLanc(id) { F.deleteDoc(F.doc(fs, base(), 'lanc', id)).catch(erro); },
     addParc(p) { F.addDoc(F.collection(fs, base(), 'parc'), p).catch(erro); },
     delParc(id) { F.deleteDoc(F.doc(fs, base(), 'parc', id)).catch(erro); },
+    updParc(id, p) { const { id: _, ...d } = p; F.setDoc(F.doc(fs, base(), 'parc', id), d).catch(erro); },
     async sair() { limpar(); await A.signOut(auth); }
   };
 }
@@ -169,6 +171,9 @@ const meioNome = id => (meios().find(m => m.id === id) || conta(id) || { nome: '
 const mesDoc = i => S.meses[keyOf(i)];
 const lancMes = i => S.lanc.filter(l => l.mes === keyOf(i));
 const soma = (arr, f = x => x.valor) => arr.reduce((s, x) => s + (f(x) || 0), 0);
+const chaveApelido = (desc, parcela) => `${String(desc || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()}|${(Math.round(parcela * 100) / 100).toFixed(2)}`;
+const apelidoDe = p => p.apelido || S.cfg?.apelidos?.[chaveApelido(p.desc, p.parcela)] || '';
+const nomeParc = p => apelidoDe(p) || p.desc;
 const ativaNoMes = (p, i) => i >= p.primeira && i < p.primeira + p.n;
 const parcNoMes = (i, filtro = () => true) => soma(S.parc.filter(p => filtro(p) && ativaNoMes(p, i)), p => p.parcela);
 const gastoCat = (id, i) => soma(lancMes(i).filter(l => l.tipo === 'gasto' && l.cat === id)) + parcNoMes(i, p => p.cat === id);
@@ -484,7 +489,7 @@ function tInicio() {
 
 function tExtrato() {
   const i = UI.mes, f = ['todas', 'entradas', 'saidas'].includes(UI.filtro) ? UI.filtro : 'todas';
-  const parcs = S.parc.filter(p => ativaNoMes(p, i)).map(p => ({ id: p.id, ehParc: true, data: '', tipo: 'parcela', valor: p.parcela, cat: p.cat, meio: p.cartao, desc: `${p.desc} · ${i - p.primeira + 1}/${p.n}` }));
+  const parcs = S.parc.filter(p => ativaNoMes(p, i)).map(p => ({ id: p.id, ehParc: true, data: '', tipo: 'parcela', valor: p.parcela, cat: p.cat, meio: p.cartao, desc: `${nomeParc(p)} · ${i - p.primeira + 1}/${p.n}` }));
   const linhas = [...lancMes(i).filter(l => l.tipo !== 'marca'), ...parcs];
   const ehEntrada = l => l.tipo === 'entrada' || (l.tipo === 'gasto' && l.valor < 0);
   const vis = linhas.filter(l => f === 'todas' || (f === 'entradas' ? ehEntrada(l) : !ehEntrada(l)));
@@ -548,9 +553,9 @@ function tCartao() {
     <section class="card" style="--hd:var(--amarelo)"><div class="card-h"><h2>Faturas de ${nm}</h2></div><div class="card-b">${faturas || '<p class="vazio">Cadastre um cartão em Ajustes.</p>'}</div></section>
     <section class="card" style="--hd:var(--lilas)"><div class="card-h"><h2>Parceladas em ${nm}</h2><button class="link" data-act="novaParc">+ Cadastrar</button></div>
       <div class="card-b">${ativas.length ? ativas.map(p => { const atual = i - p.primeira + 1, pagas = Math.max(0, Math.min(p.n, atual)); const c = cat(p.cat);
-        return `<button class="cat" style="width:100%;background:none;border-left:none;border-right:none;border-top:none;text-align:left" data-act="verParc" data-id="${esc(p.id)}"><span class="nm"><i class="dot" style="--c:${c.c}"></i>${esc(p.desc)}</span><span class="num b">${p.n}x ${fmt(p.parcela)}</span>
+        return `<button class="cat" style="width:100%;background:none;border-left:none;border-right:none;border-top:none;text-align:left" data-act="verParc" data-id="${esc(p.id)}"><span class="nm"><i class="dot" style="--c:${c.c}"></i>${esc(nomeParc(p))}</span><span class="num b">${p.n}x ${fmt(p.parcela)}</span>
         <span class="track" style="display:block"><span class="fill ${pagas >= p.n ? 'full' : pagas <= 0 ? 'zero' : ''}" style="display:block;--c:var(--lilas);width:${pagas / p.n * 100}%"></span></span>
-        <span class="meta"><span>${esc(meioNome(p.cartao))} · parcela ${atual} de ${p.n}</span><span>${atual === p.n ? 'última!' : `faltam ${p.n - atual} · até ${lab(p.primeira + p.n - 1)}`}</span></span></button>`; }).join('')
+        <span class="meta"><span>${apelidoDe(p) ? esc(p.desc) + ' · ' : ''}parcela ${atual} de ${p.n}</span><span>${atual === p.n ? 'última!' : `faltam ${p.n - atual} · até ${lab(p.primeira + p.n - 1)}`}</span></span></button>`; }).join('')
         : `<p class="vazio">Nenhuma parcela em ${nm}.</p>`}${futuras && i === CUR() ? '' : ''}</div></section>
   </div>`;
 }
@@ -734,7 +739,11 @@ function salvarWizard() {
 function folhaParc() {
   if (F.modo === 'ver') {
     const p = S.parc.find(x => x.id === F.id); if (!p) { fechar(); return; }
-    abrir(`<h3>${esc(p.desc)}</h3>
+    if (F.apelido == null) { F.apelido = apelidoDe(p); F.cat = p.cat; }
+    abrir(`<h3>${esc(nomeParc(p))}</h3>${apelidoDe(p) ? `<p class="small muted b" style="margin:0">No cartão aparece como ${esc(p.desc)}</p>` : ''}
+      <div class="field"><label for="pApelido">Apelido (para lembrar o que foi)</label><input class="inp" id="pApelido" data-fi="apelido" value="${esc(F.apelido)}" placeholder="ex.: curso de inglês"></div>
+      <div class="field"><span class="lbl">Categoria</span><div class="chips">${(F.todas ? catsOrdenadas() : catsOrdenadas().slice(0, 9).concat(catsOrdenadas().slice(0, 9).some(k => k.id === F.cat) ? [] : [cat(F.cat)])).map(k => `<button class="chip" data-f="cat" data-v="${k.id}" aria-pressed="${F.cat === k.id}"><i class="dot" style="--c:${k.c}"></i>${esc(k.nome)}</button>`).join('')}${F.todas ? '' : '<button class="chip mais" data-f="todas" data-v="1">+ categorias</button>'}</div></div>
+      <button class="btn" data-act="salvarApelido">Salvar</button>
       <div class="res" style="--r:var(--lilas-cl)">${p.n}x de <b>${fmt(p.parcela)}</b> no ${esc(meioNome(p.cartao))} · total ${fmt(p.parcela * p.n)}<br>Faturas de ${lab(p.primeira)} até ${lab(p.primeira + p.n - 1)} · categoria ${esc(cat(p.cat).nome)}</div>
       ${F.confirma ? `<div class="grid2"><button class="btn sec" data-act="naoApagar">Cancelar</button><button class="btn perigo" data-act="apagarParc">Sim, apagar</button></div>` : '<button class="btn sec" data-act="perguntaApagar">Apagar esta compra parcelada</button>'}`);
     return;
@@ -831,7 +840,7 @@ function folhaImport() {
     <div class="res">${ativas.length} compras parceladas ainda rolando${novas.length < ativas.length ? ` (${ativas.length - novas.length} já estão no app e serão puladas)` : ''}.<br>
     Parcelas: ${[0, 1, 2].map(k => `<b>${lab(i + k)}</b> ${fmt(noMes(i + k))}`).join(' · ')}</div>
     <div class="field"><span class="lbl">Em qual cartão estão?</span><div class="chips">${S.cfg.cartoes.map(c => `<button class="chip" data-act="impCartao" data-v="${c.id}" aria-pressed="${F.cartao === c.id}">${esc(c.nome)}</button>`).join('')}</div></div>
-    <div class="card"><div class="card-b">${novas.map(p => `<div class="lin"><div class="nm">${esc(p.desc)}<small>${esc(p.cat || '')} · ${lab(p.prim)} até ${lab(p.prim + p.n - 1)}</small></div><span class="num b">${p.n}x ${fmt(p.parcela)}</span></div>`).join('') || '<p class="vazio">Nada novo para importar.</p>'}</div></div>
+    <div class="card"><div class="card-b">${novas.map(p => `<div class="lin"><div class="nm">${esc(nomeParc({ desc: p.desc, parcela: p.parcela }))}<small>${esc(p.cat || '')} · ${lab(p.prim)} até ${lab(p.prim + p.n - 1)}</small></div><span class="num b">${p.n}x ${fmt(p.parcela)}</span></div>`).join('') || '<p class="vazio">Nada novo para importar.</p>'}</div></div>
     <button class="btn" data-act="importar" ${novas.length && F.cartao ? '' : 'disabled'}>Importar ${novas.length} compras</button>`);
   F.novas = novas;
 }
@@ -1060,6 +1069,12 @@ document.addEventListener('click', e => {
     novaParc: () => { F = { k: 'parc', modo: 'novo', desc: '', valor: '', n: '', atual: '1', cartao: S.cfg.cartoes[0]?.id, cat: catsOrdenadas()[0]?.id, todas: false }; folhaParc(); },
     verParc: () => { F = { k: 'parc', modo: 'ver', id: d.id, confirma: false }; folhaParc(); },
     apagarParc: () => { DB.delParc(F.id); fechar(); toast('Compra parcelada apagada'); },
+    salvarApelido: () => {
+      const p = S.parc.find(x => x.id === F.id); if (!p) return; const ap = (F.apelido || '').trim(), k = chaveApelido(p.desc, p.parcela);
+      // vale para esta compra e para qualquer outra parcela com a mesma descrição e o mesmo valor (inclusive nas próximas importações)
+      S.parc.filter(x => x.id === p.id || chaveApelido(x.desc, x.parcela) === k).forEach(x => { const { apelido, ...resto } = x; DB.updParc(x.id, { ...resto, ...(ap ? { apelido: ap } : {}), cat: x.id === p.id ? F.cat : x.cat }); });
+      const apelidos = { ...(S.cfg.apelidos || {}) }; if (ap) apelidos[k] = ap; else delete apelidos[k];
+      DB.saveCfg({ ...S.cfg, apelidos }); fechar(); toast(ap ? 'Apelido salvo' : 'Salvo'); },
     salvarParc: () => { const v = num(F.valor), n = parseInt(F.n), at = parseInt(F.atual); const c = cartao(F.cartao);
       if (v <= 0 || !n || n < 1 || !at || at < 1 || at > n || !c) { toast('Confira valor, total de parcelas e a parcela atual'); return; }
       DB.addParc({ desc: F.desc.trim() || cat(F.cat).nome, cat: F.cat, cartao: c.id, parcela: v, n, primeira: CUR() - (at - 1), data: isoHoje(), criado: Date.now() });
