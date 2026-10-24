@@ -1,6 +1,6 @@
 // Guarda os arquivos do app para abrir rápido e funcionar sem internet.
 // Os dados ficam no cache próprio do Firebase, não aqui.
-const CACHE = 'dindin-v3';
+const CACHE = 'dindin-v4';
 const ARQUIVOS = ['./', './index.html', './styles.css', './app.js', './firebase-config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/apple-touch-icon.png'];
 

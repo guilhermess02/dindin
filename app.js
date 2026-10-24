@@ -483,22 +483,26 @@ function tInicio() {
 }
 
 function tExtrato() {
-  const i = UI.mes, f = UI.filtro;
+  const i = UI.mes, f = ['todas', 'entradas', 'saidas'].includes(UI.filtro) ? UI.filtro : 'todas';
   const parcs = S.parc.filter(p => ativaNoMes(p, i)).map(p => ({ id: p.id, ehParc: true, data: '', tipo: 'parcela', valor: p.parcela, cat: p.cat, meio: p.cartao, desc: `${p.desc} · ${i - p.primeira + 1}/${p.n}` }));
   const linhas = [...lancMes(i).filter(l => l.tipo !== 'marca'), ...parcs];
-  const vis = linhas.filter(l => f === 'todas' || (f === 'entradas' ? ['entrada', 'guardar'].includes(l.tipo) : f === 'faturas' ? l.tipo === 'fatura' : l.cat === f));
-  const grupos = {}; vis.forEach(l => { const d = l.ehParc ? 0 : diaDe(l); (grupos[d] = grupos[d] || []).push(l); });
-  const dias = Object.keys(grupos).map(Number).sort((a, b) => b - a);
-  const usadas = [...new Set(linhas.map(l => l.cat).filter(Boolean))].map(cat);
+  const ehEntrada = l => l.tipo === 'entrada' || (l.tipo === 'gasto' && l.valor < 0);
+  const vis = linhas.filter(l => f === 'todas' || (f === 'entradas' ? ehEntrada(l) : !ehEntrada(l)));
+  const grupos = {}; vis.forEach(l => { const d = l.ehParc ? '0' : l.data; (grupos[d] = grupos[d] || []).push(l); });
+  const datas = Object.keys(grupos).sort((a, b) => b.localeCompare(a));
+  const titulo = d => { if (d === '0') return 'Parcelas deste mês'; if (d === isoHoje()) return 'Hoje'; if (d === isoOntem()) return 'Ontem';
+    const dt = new Date(d + 'T12:00'); return `${d.slice(8, 10)}/${d.slice(5, 7)} · ${['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'][dt.getDay()]}`; };
+  const totE = soma(vis.filter(ehEntrada), l => Math.abs(l.valor)), totS = soma(vis.filter(l => !ehEntrada(l)), l => l.valor);
   const icone = l => l.tipo === 'entrada' ? ['+', 'var(--salvia-cl)'] : l.tipo === 'guardar' ? ['$', 'var(--pessego-md)'] : l.tipo === 'fatura' ? ['F', 'var(--lilas-md)'] : [cat(l.cat).nome[0], cat(l.cat).c];
-  const rotulo = l => l.tipo === 'guardar' ? `Guardado em ${esc(conta(l.para)?.nome || '')}` : l.tipo === 'entrada' ? esc(l.catEnt || 'Entrada') : l.tipo === 'fatura' ? 'Pagamento de fatura' : esc(cat(l.cat).nome);
+  const rotulo = l => l.tipo === 'guardar' ? `Guardado em ${esc(conta(l.para)?.nome || '')}` : l.tipo === 'entrada' ? esc(l.catEnt || 'Entrada') : l.tipo === 'fatura' ? 'Pagamento de fatura' : esc(cat(l.cat).nome) + (l.valor < 0 ? ' · estorno' : '');
   return `${cabecalho('Extrato', nomeMes(i), true)}
-  <div class="chips" style="margin-bottom:14px">${[['todas', 'Tudo'], ['entradas', 'Entradas'], ['faturas', 'Faturas'], ...usadas.map(c => [c.id, c.nome])].map(([id, n]) => `<button class="chip" data-act="filtro" data-v="${esc(id)}" aria-pressed="${f === id}">${esc(n)}</button>`).join('')}</div>
+  <div class="seg" style="--n:3;margin-bottom:10px">${[['todas', 'Tudo'], ['entradas', 'Entradas'], ['saidas', 'Saídas']].map(([id, n]) => `<button data-act="filtro" data-v="${id}" aria-pressed="${f === id}">${n}</button>`).join('')}</div>
+  <div class="row small b" style="margin-bottom:12px"><span style="color:var(--ok)">Entradas ${fmt(totE)}</span><span>Saídas ${fmt(totS)}</span></div>
   <section class="card" style="--sombra:var(--azul-md)"><div class="card-b">
-  ${dias.length ? dias.map(d => `<div class="dia">${d === 0 ? 'Parcelas deste mês' : 'Dia ' + d}</div>${grupos[d].map(l => {
-    const [t, c] = icone(l); const pos = l.tipo === 'entrada';
+  ${datas.length ? datas.map(d => `<div class="dia">${titulo(d)}</div>${grupos[d].map(l => {
+    const [t, c] = icone(l); const pos = ehEntrada(l);
     return `<button class="mov" data-act="${l.ehParc ? 'verParc' : 'editar'}" data-id="${esc(l.id)}"><span class="ic" style="--c:${c}">${esc(t)}</span><span class="tx"><b>${esc(l.desc || rotulo(l))}</b><small>${rotulo(l)} · ${esc(meioNome(l.meio))}</small></span>
-      <span class="vl" style="color:${pos ? 'var(--ok)' : 'var(--tinta)'}">${pos ? '+' : '-'}${fmt(l.valor)}</span></button>`; }).join('')}`).join('')
+      <span class="vl" style="color:${pos ? 'var(--ok)' : 'var(--tinta)'}">${pos ? '+' : '-'}${fmt(Math.abs(l.valor))}</span></button>`; }).join('')}`).join('')
     : '<p class="vazio">Nada por aqui ainda. Toque no + para lançar.</p>'}
   </div></section>`;
 }
@@ -518,40 +522,36 @@ function simResultado() {
 }
 
 function tCartao() {
-  const T = teto(), i = CUR(), mes = parcNoMes(i), prox = parcNoMes(i + 1);
+  const T = teto(), i = UI.mes, mes = parcNoMes(i), prox = parcNoMes(i + 1), nm = nomeMes(i).toLowerCase();
   if (!UI.sim.cartao || !cartao(UI.sim.cartao)) UI.sim.cartao = S.cfg.cartoes[0]?.id;
   const sr = simResultado();
-  const ativas = S.parc.filter(p => i < p.primeira + p.n).sort((a, b) => (a.primeira + a.n) - (b.primeira + b.n));
+  const ativas = S.parc.filter(p => ativaNoMes(p, i)).sort((a, b) => (a.primeira + a.n) - (b.primeira + b.n));
+  const futuras = S.parc.filter(p => p.primeira > i).length;
   const faturas = S.cfg.cartoes.map(c => {
-    const aberta = faturaDe(c, i, DIA()), fechada = aberta - 1;
-    const vF = valorFatura(c, fechada), vA = valorFatura(c, aberta), pg = faturaPaga(c, fechada);
-    const y = Math.floor(fechada / 12), m = fechada % 12, venc = new Date(y, m, c.vence + 5).getTime();
-    const mostrar = pg || (vF > 0 && Date.now() <= venc);
-    return `<div class="lin"><div class="nm">${esc(c.nome)}<small>fecha dia ${c.fecha} · vence dia ${c.vence}</small></div></div>
-      ${mostrar ? `<div class="lin" style="padding-top:0"><div class="nm small">Fatura de ${lab(fechada)} <small>fechada · vence dia ${c.vence}</small></div>
-        ${pg ? `<span class="pill p-ok">paga ${fmt(pg.valor)}</span>` : `<span class="num b">${fmt(vF)}</span><button class="chip" data-act="pagarFatura" data-id="${c.id}" data-m="${fechada}" data-v="${vF}">Paguei</button>`}</div>` : ''}
-      <div class="lin" style="padding-top:0"><div class="nm small">Fatura de ${lab(aberta)} <small>aberta, ainda somando</small></div><span class="num b">${fmt(vA)}</span></div>`; }).join('');
-  return `${cabecalho('Cartão e parcelas', 'Parcelinhas', false)}
+    const v = valorFatura(c, i), pg = faturaPaga(c, i), aberta = faturaDe(c, CUR(), DIA());
+    const est = pg ? `<span class="pill p-ok">paga ${fmt(pg.valor)}</span>` : i < aberta && v > 0 ? `<button class="chip" data-act="pagarFatura" data-id="${c.id}" data-m="${i}" data-v="${v}">Paguei</button>` : i === aberta ? '<span class="pill p-neutro">aberta</span>' : i > aberta ? '<span class="pill p-neutro">futura</span>' : '';
+    return `<div class="lin"><div class="nm">${esc(c.nome)}<small>vence dia ${c.vence} de ${nm} · fecha dia ${c.fecha}</small></div><span class="num b">${fmt(v)}</span>${est}</div>`; }).join('');
+  return `${cabecalho('Cartão e parcelas', nomeMes(i), true)}
   <div class="stack">
-    <section class="card" style="--hd:var(--rosa-md)"><div class="card-h"><h2>Parcelas deste mês</h2><button class="link" data-act="tab" data-v="ajustes">teto ${fmt0(T)}${S.cfg.teto.modo === 'pct' ? ` (${S.cfg.teto.pct}%)` : ''}</button></div>
+    <section class="card" style="--hd:var(--rosa-md)"><div class="card-h"><h2>Parcelas de ${nm}</h2><button class="link" data-act="tab" data-v="ajustes">teto ${fmt0(T)}${S.cfg.teto.modo === 'pct' ? ` (${S.cfg.teto.pct}%)` : ''}</button></div>
       <div class="card-b stack" style="gap:8px"><div class="row"><span class="big num" style="font-size:36px">${fmt(mes)}</span><span class="pill p-${mes > T ? 'estouro' : mes / T >= .85 ? 'alerta' : 'ok'}">${T > 0 ? Math.round(mes / T * 100) : 0}% do teto</span></div>
       <div class="track"><div class="fill ${mes <= 0 ? 'zero' : mes >= T ? 'full' : ''}" style="--c:var(--rosa);width:${T > 0 ? Math.min(100, mes / T * 100) : 0}%"></div></div>
-      <div class="small muted b">Próximo mês: ${fmt(prox)} · ${prox > T ? 'acima do teto' : 'sobram ' + fmt(T - prox) + ' no teto'}</div></div></section>
+      <div class="small muted b">${nomeMes(i + 1)}: ${fmt(prox)} · ${prox > T ? 'acima do teto' : 'sobram ' + fmt(T - prox) + ' no teto'}</div></div></section>
     <section class="card" style="--hd:var(--azul)"><div class="card-h"><h2>Posso parcelar?</h2></div>
       <div class="card-b stack">
         <div class="grid2"><div class="field"><label for="simTot">Valor total</label><input class="inp" id="simTot" inputmode="decimal" placeholder="R$ 0,00" value="${esc(UI.sim.total)}" data-sim="total"></div>
         <div class="field"><label for="simN">Parcelas</label><select class="inp" id="simN" data-sim="n">${[...Array(12)].map((_, k) => `<option ${k + 1 === UI.sim.n ? 'selected' : ''} value="${k + 1}">${k + 1}x</option>`).join('')}</select></div></div>
         <div class="field"><span class="lbl">Cartão</span><div class="chips">${S.cfg.cartoes.map(c => `<button class="chip" data-act="simCartao" data-v="${c.id}" aria-pressed="${UI.sim.cartao === c.id}">${esc(c.nome)}</button>`).join('')}</div></div>
-        <div id="simArea" class="stack" style="gap:10px">${sr.html}${barras(i, 11, sr.extra)}</div>
+        <div id="simArea" class="stack" style="gap:10px">${sr.html}${barras(CUR(), 11, sr.extra)}</div>
         <div class="row small muted b" style="justify-content:flex-start;gap:14px;flex-wrap:wrap"><span><i class="dot" style="--c:#B3C5DB;vertical-align:-1px"></i> parcelas atuais</span><span><i class="dot" style="--c:#E2BECB;vertical-align:-1px"></i> compra simulada</span></div>
       </div></section>
-    <section class="card" style="--hd:var(--amarelo)"><div class="card-h"><h2>Faturas</h2></div><div class="card-b">${faturas || '<p class="vazio">Cadastre um cartão em Ajustes.</p>'}</div></section>
-    <section class="card" style="--hd:var(--lilas)"><div class="card-h"><h2>Compras parceladas</h2><button class="link" data-act="novaParc">+ Cadastrar</button></div>
+    <section class="card" style="--hd:var(--amarelo)"><div class="card-h"><h2>Faturas de ${nm}</h2></div><div class="card-b">${faturas || '<p class="vazio">Cadastre um cartão em Ajustes.</p>'}</div></section>
+    <section class="card" style="--hd:var(--lilas)"><div class="card-h"><h2>Parceladas em ${nm}</h2><button class="link" data-act="novaParc">+ Cadastrar</button></div>
       <div class="card-b">${ativas.length ? ativas.map(p => { const atual = i - p.primeira + 1, pagas = Math.max(0, Math.min(p.n, atual)); const c = cat(p.cat);
         return `<button class="cat" style="width:100%;background:none;border-left:none;border-right:none;border-top:none;text-align:left" data-act="verParc" data-id="${esc(p.id)}"><span class="nm"><i class="dot" style="--c:${c.c}"></i>${esc(p.desc)}</span><span class="num b">${p.n}x ${fmt(p.parcela)}</span>
         <span class="track" style="display:block"><span class="fill ${pagas >= p.n ? 'full' : pagas <= 0 ? 'zero' : ''}" style="display:block;--c:var(--lilas);width:${pagas / p.n * 100}%"></span></span>
-        <span class="meta"><span>${esc(meioNome(p.cartao))} · ${atual >= 1 ? `parcela ${atual} de ${p.n} neste mês` : `começa em ${lab(p.primeira)}`}</span><span>última em ${lab(p.primeira + p.n - 1)}</span></span></button>`; }).join('')
-        : '<p class="vazio">Nenhuma parcela em aberto. Use “+ Cadastrar” para as compras que já estão rolando.</p>'}</div></section>
+        <span class="meta"><span>${esc(meioNome(p.cartao))} · parcela ${atual} de ${p.n}</span><span>${atual === p.n ? 'última!' : `faltam ${p.n - atual} · até ${lab(p.primeira + p.n - 1)}`}</span></span></button>`; }).join('')
+        : `<p class="vazio">Nenhuma parcela em ${nm}.</p>`}${futuras && i === CUR() ? '' : ''}</div></section>
   </div>`;
 }
 
@@ -929,6 +929,7 @@ function planoExcel() {
     if (ja.has(chaveImp(l.data, l.desc, l.valor))) { r.repetidos++; continue; }
     if (!l.entrada && l.parcelado) { r.parcelados++; continue; }
     if (normal(l.cat).startsWith('pagamento fatura')) { r.faturas++; continue; }
+    if (l.entrada && l.valor < 0 && /cancel|estorn|reembols|devolu/.test(normal(l.desc))) { r.gastos.push({ ...l, chave: chaveImp(l.data, l.desc, l.valor) }); continue; }
     if (l.entrada) { if (l.valor > 0) r.entradas.push({ ...l, chave: chaveImp(l.data, l.desc, l.valor) }); else r.estornos++; continue; }
     const v = { ...l, valor: Math.abs(l.valor), chave: chaveImp(l.data, l.desc, l.valor) };
     const fx = fixasDoMes(l.mes).find(f => normal(f.nome) === normal(l.cat));
