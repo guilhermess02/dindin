@@ -151,7 +151,7 @@ nav.tabs .plus span{width:60px;height:60px;border-radius:50%;background:var(--ro
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(92px + env(safe-area-inset-bottom,0px));z-index:40;background:var(--tinta);color:var(--branco);font-weight:800;padding:10px 16px;border-radius:999px;font-size:14px;max-width:90vw;text-align:center}
 @media (prefers-reduced-motion:no-preference){
   .sheet{animation:sobe .22s ease-out} .fill{transition:width .4s}
-  @keyframes sobe{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
+  @keyframes sobe{from{transform:translateY(40px)}to{transform:none}}
 }
 
 /* tutorial */

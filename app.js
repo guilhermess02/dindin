@@ -200,14 +200,15 @@ const diaDe = l => Number(String(l.data).slice(8, 10));
 function faturaDe(c, i, d) { const fech = i + (d >= c.fecha ? 1 : 0); return c.vence > c.fecha ? fech : fech + 1; }
 function janela(c, M) { const fech = c.vence > c.fecha ? M : M - 1; return { de: `${c.fecha}/${MES[((fech - 1) % 12 + 12) % 12]}`, ate: `${c.fecha - 1 || 'último dia'}/${MES[(fech % 12 + 12) % 12]}` }; }
 function valorFatura(c, M) {
-  const avista = soma(S.lanc.filter(l => l.tipo === 'gasto' && l.meio === c.id && faturaDe(c, idxOfKey(l.mes), diaDe(l)) === M));
+  const avista = soma(S.lanc.filter(l => l.tipo === 'gasto' && l.meio === c.id && faturaDe(c, idxOfKey(String(l.data).slice(0, 7)), diaDe(l)) === M));
   return r2(avista + parcNoMes(M, p => p.cartao === c.id));
 }
 const faturaPaga = (c, M) => S.lanc.find(l => l.tipo === 'fatura' && l.cartao === c.id && l.fatM === M);
 function saldo(ct) {
   let s = ct.base || 0; const ts = ct.baseTs || 0;
   for (const l of S.lanc) {
-    if ((l.criado || 0) <= ts || (l.data && l.data > isoHoje())) continue;
+    if ((l.criado || 0) <= ts || (l.data && l.data > isoHoje()) || l.tipo === 'marca') continue;
+    if (l.importado && new Date(l.data + 'T23:59').getTime() <= ts) continue;
     if (l.tipo === 'entrada' && l.meio === ct.id) s += l.valor;
     if ((l.tipo === 'gasto' || l.tipo === 'fatura') && l.meio === ct.id) s -= l.valor;
     if (l.tipo === 'guardar') { if (l.meio === ct.id) s -= l.valor; if (l.para === ct.id) s += l.valor; }
@@ -484,7 +485,7 @@ function tInicio() {
 function tExtrato() {
   const i = UI.mes, f = UI.filtro;
   const parcs = S.parc.filter(p => ativaNoMes(p, i)).map(p => ({ id: p.id, ehParc: true, data: '', tipo: 'parcela', valor: p.parcela, cat: p.cat, meio: p.cartao, desc: `${p.desc} · ${i - p.primeira + 1}/${p.n}` }));
-  const linhas = [...lancMes(i), ...parcs];
+  const linhas = [...lancMes(i).filter(l => l.tipo !== 'marca'), ...parcs];
   const vis = linhas.filter(l => f === 'todas' || (f === 'entradas' ? ['entrada', 'guardar'].includes(l.tipo) : f === 'faturas' ? l.tipo === 'fatura' : l.cat === f));
   const grupos = {}; vis.forEach(l => { const d = l.ehParc ? 0 : diaDe(l); (grupos[d] = grupos[d] || []).push(l); });
   const dias = Object.keys(grupos).map(Number).sort((a, b) => b - a);
@@ -580,7 +581,8 @@ function tAjustes() {
     <section class="card" style="--hd:var(--salvia)"><div class="card-h"><h2>Conta</h2></div>
       <div class="card-b stack" style="gap:10px"><div class="field"><label for="aNome">Seu nome</label><input class="inp" id="aNome" data-cfg="nome" value="${esc(c.nome)}"></div>
       <div class="small muted b">${S.demo ? 'Modo demonstração: os dados ficam só neste aparelho.' : 'Conectada como ' + esc(S.user?.email || '')}</div>
-      <label class="btn sec" style="text-align:center;cursor:pointer" for="fImport">Importar parcelas (arquivo)</label><input id="fImport" type="file" accept=".json,application/json" hidden>
+      <label class="btn" style="text-align:center;cursor:pointer" for="fExcel">Importar planilha do Excel</label><input id="fExcel" type="file" accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden>
+      <label class="btn sec" style="text-align:center;cursor:pointer" for="fImport">Importar parcelas (arquivo .json)</label><input id="fImport" type="file" accept=".json,application/json" hidden>
       <button class="btn sec" data-act="backup">Baixar backup</button>
       <button class="btn sec" data-act="sair">${S.demo ? 'Apagar dados da demonstração' : 'Sair'}</button></div></section>
   </div>`;
@@ -596,7 +598,7 @@ function abrir(html) {
 }
 function fechar() { document.getElementById('sheetRoot').innerHTML = ''; F = null; }
 function toast(t) { const r = document.getElementById('toastRoot'); r.innerHTML = `<div class="toast" role="status">${esc(t)}</div>`; clearTimeout(toast.t); toast.t = setTimeout(() => r.innerHTML = '', 2400); }
-const reabrir = () => { if (!F) return; ({ lanc: folhaLancar, mover: folhaMover, wiz: folhaWizard, form: folhaForm, parc: folhaParc, imp: folhaImport })[F.k](); };
+const reabrir = () => { if (!F) return; ({ lanc: folhaLancar, mover: folhaMover, wiz: folhaWizard, form: folhaForm, parc: folhaParc, imp: folhaImport, xls: folhaExcel })[F.k](); };
 
 /* --- lançar / editar --- */
 function catsOrdenadas() {
@@ -614,7 +616,7 @@ function novoLanc(tipo = 'gasto') {
 }
 function infoLanc() {
   const v = num(F.valor); if (v <= 0) return '';
-  const i = idxOfKey(F.data.slice(0, 7));
+  let i = idxOfKey(F.data.slice(0, 7));
   const c = cartao(F.meio);
   if (F.tipo === 'gasto' && c && F.n > 1) {
     const M = faturaDe(c, i, Number(F.data.slice(8, 10))); const par = r2(v / F.n); const pk = picoParcelas(M, F.n, par);
@@ -622,9 +624,11 @@ function infoLanc() {
       : `${F.n}x de ${fmt(par)} · 1ª parcela na fatura de ${lab(M)}. Cada parcela conta em ${esc(cat(F.cat).nome)} no mês da fatura.`;
   }
   if (F.tipo === 'gasto') {
-    const k = cat(F.cat), p = planCat(k.id, i); const ant = F.id ? (S.lanc.find(l => l.id === F.id)?.valor || 0) : 0; const g = gastoCat(k.id, i) - ant + v;
-    if (p <= 0) return `${esc(k.nome)} não tem valor planejado neste mês.`;
-    return g > p ? `<b>${esc(k.nome)} vai passar ${fmt(g - p)}</b> do planejado.` : `Depois desse gasto, sobram <b>${fmt(p - g)}</b> em ${esc(k.nome)}.`;
+    if (c) i = faturaDe(c, i, Number(F.data.slice(8, 10)));
+    const k = cat(F.cat), p = planCat(k.id, i);
+    const pref = c ? `Entra na fatura de ${lab(i)} e conta em ${nomeMes(i).toLowerCase()}. ` : ''; const ant = F.id ? (S.lanc.find(l => l.id === F.id)?.valor || 0) : 0; const g = gastoCat(k.id, i) - ant + v;
+    if (p <= 0) return pref + `${esc(k.nome)} não tem valor planejado em ${nomeMes(i).toLowerCase()}.`;
+    return pref + (g > p ? `<b>${esc(k.nome)} vai passar ${fmt(g - p)}</b> do planejado.` : `Depois desse gasto, sobram <b>${fmt(p - g)}</b> em ${esc(k.nome)}.`);
   }
   if (F.tipo === 'guardar') { const m = metaGuardar(i), g = guardado(i) + v; return m > 0 ? (g >= m ? '<b>Meta do mês batida!</b>' : `Faltarão ${fmt(m - g)} para a meta do mês.`) : ''; }
   return '';
@@ -661,7 +665,8 @@ function salvarLanc() {
   if (!F.id && F.tipo === 'gasto' && c && F.n > 1) {
     DB.addParc({ desc: F.desc.trim() || cat(F.cat).nome, cat: F.cat, cartao: c.id, parcela: r2(v / F.n), n: Number(F.n), primeira: faturaDe(c, i, Number(F.data.slice(8, 10))), data: F.data, criado: Date.now() });
   } else {
-    const l = { data: F.data, mes: keyOf(F.tipo === 'entrada' && F.comp != null ? Number(F.comp) : i), tipo: F.tipo, valor: v, meio: F.meio, desc: F.desc.trim(), criado: F.criado || Date.now() };
+    const compet = F.tipo === 'entrada' && F.comp != null ? Number(F.comp) : (F.tipo === 'gasto' && c ? faturaDe(c, i, Number(F.data.slice(8, 10))) : i);
+    const l = { data: F.data, mes: keyOf(compet), tipo: F.tipo, valor: v, meio: F.meio, desc: F.desc.trim(), criado: F.criado || Date.now() };
     if (F.tipo === 'gasto') l.cat = F.cat;
     if (F.tipo === 'entrada') l.catEnt = F.catEnt;
     if (F.tipo === 'guardar') l.para = F.para;
@@ -842,6 +847,134 @@ function importarParcelas() {
   fechar(); toast(`${ps.length} compras parceladas importadas`);
 }
 
+/* --- importar a planilha de Excel dela (abas Lançamentos e Parcelamentos) --- */
+async function carregarXLSX() {
+  if (window.XLSX) return window.XLSX;
+  await new Promise((ok, erro) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload = ok; s.onerror = erro; document.head.appendChild(s); });
+  return window.XLSX;
+}
+function isoDe(XLSX, v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') { const d = XLSX.SSF.parse_date_code(v); return d ? `${d.y}-${pad(d.m)}-${pad(d.d)}` : null; }
+  if (v instanceof Date) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
+  const m = String(v).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? `${m[3]}-${pad(m[2])}-${pad(m[1])}` : null;
+}
+const valorDe = v => typeof v === 'number' ? r2(v) : num(v);
+function aba(XLSX, wb, nomes) {
+  const nome = wb.SheetNames.find(n => nomes.includes(normal(n))); if (!nome) return null;
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[nome], { header: 1, raw: true, defval: null });
+  const h = rows.findIndex(r => r.some(c => normal(c).startsWith('descri'))); if (h < 0) return null;
+  const head = rows[h].map(normal);
+  const col = (...ps) => head.findIndex(x => ps.some(p => typeof p === 'function' ? p(x) : x.startsWith(p)));
+  return { col, linhas: rows.slice(h + 1).filter(r => r.some(c => c != null && c !== '')) };
+}
+function lerPlanilha(XLSX, wb) {
+  const res = { lanc: [], parc: [] };
+  const L = aba(XLSX, wb, ['lancamentos', 'lancamento', 'extrato']);
+  if (L) {
+    const c = { dd: L.col('data desp', x => x === 'data'), dp: L.col('data pag'), desc: L.col('descri'), val: L.col('valor'), tipo: L.col(x => x.startsWith('tipo') && x.includes('entrada')),
+      cat: L.col(x => x === 'categoria'), meio: L.col('meio'), mes: L.col('mes'), parc: L.col('parcelado'), fixa: L.col('tipo desp') };
+    for (const r of L.linhas) {
+      const data = isoDe(XLSX, r[c.dd]) || isoDe(XLSX, r[c.dp]); const valor = valorDe(r[c.val]); if (!data || !valor) continue;
+      let mes = null; const mt = String(r[c.mes] ?? '').match(/(\d{1,2})\/(\d{4})/);
+      if (mt) mes = idx(Number(mt[2]), Number(mt[1]) - 1); else mes = idxOfKey((isoDe(XLSX, r[c.dp]) || data).slice(0, 7));
+      res.lanc.push({ data, mes, desc: String(r[c.desc] ?? '').trim(), valor, entrada: normal(r[c.tipo]).startsWith('entrada'), cat: String(r[c.cat] ?? '').trim(),
+        meio: String(r[c.meio] ?? ''), parcelado: normal(r[c.parc]).startsWith('sim'), fixa: normal(r[c.fixa]).startsWith('fixa') });
+    }
+  }
+  const P = aba(XLSX, wb, ['parcelamentos', 'parcelas', 'parcelados']);
+  if (P) {
+    const c = { dd: P.col('data desp'), dp: P.col('data pag'), desc: P.col('descri'), vp: P.col('valor parcela', x => x === 'valor parcela'), meio: P.col('meio'), cat: P.col(x => x === 'categoria'),
+      n: P.col('total parcelas'), k: P.col('parcela atual') };
+    const grupos = {};
+    for (const r of P.linhas) {
+      const dp = isoDe(XLSX, r[c.dp]), vp = valorDe(r[c.vp]), n = parseInt(r[c.n]), k = parseInt(r[c.k]); if (!dp || !vp || !n || !k) continue;
+      const desc = String(r[c.desc] ?? '').replace(/\s+\d{2}\/\d{2}\s*$/, '').trim(); const prim = idxOfKey(dp.slice(0, 7)) - (k - 1);
+      const key = [normal(desc), vp, n, normal(r[c.meio])].join('|');
+      (grupos[key] = grupos[key] || []).push({ desc, vp, n, prim, meio: String(r[c.meio] ?? ''), cat: String(r[c.cat] ?? '').trim(), data: isoDe(XLSX, r[c.dd]) });
+    }
+    for (const g of Object.values(grupos)) {
+      const cont = {}; g.forEach(x => cont[x.prim] = (cont[x.prim] || 0) + 1);
+      const prim = Number(Object.keys(cont).sort((a, b) => cont[b] - cont[a])[0]); const x = g[0];
+      res.parc.push({ desc: x.desc, parcela: x.vp, n: x.n, prim, meio: x.meio, cat: x.cat, data: g.map(y => y.data).filter(Boolean).sort()[0] || isoHoje() });
+    }
+  }
+  return res;
+}
+/* liga o texto "Itaú - Cartão de Crédito" ao cartão/conta do app */
+function meioDe(txt) {
+  const t = normal(txt), w = t.split(/[\s-]+/)[0];
+  if (t.includes('cart')) return (S.cfg.cartoes.find(c => normal(c.nome).includes(w)) || S.cfg.cartoes.find(c => normal(c.nome).includes('outro')) || S.cfg.cartoes[0])?.id;
+  return (contasCorrentes().find(c => normal(c.nome).includes(w)) || contasCorrentes()[0])?.id;
+}
+const chaveImp = (data, desc, valor) => `${data}|${normal(desc)}|${r2(valor)}`;
+async function lerExcel(arq) {
+  toast('Lendo a planilha...');
+  try {
+    const XLSX = await carregarXLSX();
+    const wb = XLSX.read(new Uint8Array(await arq.arrayBuffer()), { type: 'array' });
+    const dados = lerPlanilha(XLSX, wb);
+    if (!dados.lanc.length && !dados.parc.length) { toast('Não achei as abas Lançamentos ou Parcelamentos'); return; }
+    const meses = [...new Set(dados.lanc.map(l => l.mes))].sort((a, b) => b - a);
+    const sel = meses.filter(m => m >= CUR()); 
+    F = { k: 'xls', dados, meses, sel: sel.length ? sel : meses.slice(0, 1), comParc: true }; folhaExcel();
+  } catch (e) { console.error(e); toast('Não consegui ler esse arquivo'); }
+  const inp = document.getElementById('fExcel'); if (inp) inp.value = '';
+}
+function planoExcel() {
+  const ja = new Set(S.lanc.map(l => l.imp).filter(Boolean));
+  const L = F.dados.lanc.filter(l => F.sel.includes(l.mes));
+  const r = { gastos: [], entradas: [], fixas: [], parcelados: 0, faturas: 0, repetidos: 0, estornos: 0 };
+  for (const l of L) {
+    if (ja.has(chaveImp(l.data, l.desc, l.valor))) { r.repetidos++; continue; }
+    if (!l.entrada && l.parcelado) { r.parcelados++; continue; }
+    if (normal(l.cat).startsWith('pagamento fatura')) { r.faturas++; continue; }
+    if (l.entrada) { if (l.valor > 0) r.entradas.push({ ...l, chave: chaveImp(l.data, l.desc, l.valor) }); else r.estornos++; continue; }
+    const v = { ...l, valor: Math.abs(l.valor), chave: chaveImp(l.data, l.desc, l.valor) };
+    const fx = fixasDoMes(l.mes).find(f => normal(f.nome) === normal(l.cat));
+    if (l.fixa && fx) r.fixas.push({ ...v, fixaId: fx.id }); else r.gastos.push(v);
+  }
+  const iC = CUR(); const ativas = F.dados.parc.filter(p => p.prim + p.n - 1 >= iC);
+  r.parc = ativas.filter(p => !S.parc.some(x => normal(x.desc) === normal(p.desc) && Math.abs(x.parcela - p.parcela) < .01 && x.n === p.n && x.primeira === p.prim));
+  r.parcJa = ativas.length - r.parc.length;
+  return r;
+}
+function folhaExcel() {
+  const r = planoExcel();
+  abrir(`<h3>Importar planilha</h3>
+    ${F.meses.length ? `<div class="field"><span class="lbl">Quais meses? (pela coluna Mês Pgto)</span><div class="chips">${F.meses.map(m => `<button class="chip" data-act="xlsMes" data-v="${m}" aria-pressed="${F.sel.includes(m)}">${lab(m)}</button>`).join('')}</div></div>` : ''}
+    <div class="card"><div class="card-b">
+      <div class="lin"><div class="nm">Gastos à vista<small>classificados pela coluna Categoria</small></div><span class="num b">${r.gastos.length} · ${fmt(soma(r.gastos))}</span></div>
+      <div class="lin"><div class="nm">Entradas<small>salário, transferências...</small></div><span class="num b">${r.entradas.length} · ${fmt(soma(r.entradas))}</span></div>
+      <div class="lin"><div class="nm">Contas fixas pagas<small>marcadas como pagas no mês</small></div><span class="num b">${r.fixas.length} · ${fmt(soma(r.fixas))}</span></div>
+      ${F.dados.parc.length ? `<div class="lin"><button class="ck" data-act="xlsParc" aria-pressed="${F.comParc}" aria-label="Importar parcelas">${F.comParc ? check : ''}</button><div class="nm">Compras parceladas rolando<small>da aba Parcelamentos${r.parcJa ? ` · ${r.parcJa} já estão no app` : ''}</small></div><span class="num b">${r.parc.length} novas</span></div>` : ''}
+    </div></div>
+    <div class="res" style="--r:var(--azul-cl)">Ficam de fora: ${r.parcelados} linhas parceladas (já vêm da aba Parcelamentos), ${r.faturas} pagamentos de fatura (os gastos do cartão já estão lançados um a um)${r.estornos ? `, ${r.estornos} entradas negativas` : ''}${r.repetidos ? ` e ${r.repetidos} que já foram importados antes` : ''}.</div>
+    <button class="btn" data-act="xlsImportar" ${r.gastos.length + r.entradas.length + r.fixas.length + (F.comParc ? r.parc.length : 0) ? '' : 'disabled'}>Importar</button>`);
+}
+function importarExcel() {
+  const r = planoExcel(); let cats = [...S.cfg.cats], entradas = [...S.cfg.entradas], mudou = false;
+  const catId = nome => { const n = normal(nome); let c = cats.find(x => normal(x.nome) === n);
+    if (!c) { const nm = String(nome || 'Outros').trim() || 'Outros'; c = cats.find(x => normal(x.nome) === normal(nm)) || { id: slug(nm) + '-' + novoId().slice(-4), nome: nm, c: PAL[cats.length % PAL.length], ativa: true }; if (!cats.includes(c)) { cats.push(c); mudou = true; } }
+    return c.id; };
+  const agora = Date.now();
+  const base = l => ({ data: l.data, mes: keyOf(l.mes), valor: l.valor, desc: l.desc, meio: meioDe(l.meio), imp: l.chave, importado: true, criado: agora });
+  r.gastos.forEach(l => DB.addLanc({ ...base(l), tipo: 'gasto', cat: catId(l.cat) }));
+  r.entradas.forEach(l => { const ce = l.cat || 'Entrada'; if (!entradas.some(e => normal(e) === normal(ce))) { entradas.push(ce); mudou = true; } DB.addLanc({ ...base(l), tipo: 'entrada', catEnt: ce }); });
+  // contas fixas: marca como paga no mês (sem descontar de novo do saldo informado)
+  const porMes = {}; r.fixas.forEach(f => (porMes[f.mes] = porMes[f.mes] || []).push(f));
+  for (const [m, lista] of Object.entries(porMes)) {
+    const i = Number(m), md = mesDoc(i) || mesPadrao(i);
+    const fixas = md.fixas.map(x => { const f = lista.find(y => y.fixaId === x.id); return f ? { ...x, valor: f.valor, pago: true, pagoTs: 0 } : x; });
+    DB.saveMes(keyOf(i), { ...md, fixas });
+    lista.forEach(f => DB.addLanc({ ...base(f), tipo: 'marca', fixa: f.fixaId })); // só para não importar de novo
+  }
+  if (F.comParc) r.parc.forEach(p => DB.addParc({ desc: p.desc, cat: catId(p.cat), cartao: meioDe(p.meio) || S.cfg.cartoes[0]?.id, parcela: r2(p.parcela), n: p.n, primeira: p.prim, data: p.data, criado: agora }));
+  if (mudou) DB.saveCfg({ ...S.cfg, cats, entradas });
+  const nP = F.comParc ? r.parc.length : 0;
+  fechar(); toast(`Importado: ${r.gastos.length} gastos, ${r.entradas.length} entradas, ${r.fixas.length} fixas, ${nP} parceladas`);
+}
+
 /* =========================================================
    Render e eventos
    ========================================================= */
@@ -945,6 +1078,9 @@ document.addEventListener('click', e => {
         remover: () => DB.saveMes(keyOf(i), { ...m, fixas: m.fixas.filter(x => x.id !== f.id) }) };
       folhaForm(); },
     importar: () => importarParcelas(),
+    xlsMes: () => { const m = Number(d.v); F.sel = F.sel.includes(m) ? F.sel.filter(x => x !== m) : [...F.sel, m]; folhaExcel(); },
+    xlsParc: () => { F.comParc = !F.comParc; folhaExcel(); },
+    xlsImportar: () => importarExcel(),
     impCartao: () => { F.cartao = d.v; folhaImport(); },
     editConta: () => editConta(d.id), editCartao: () => editCartao(d.id), editFixa: () => editFixa(d.id), editCat: () => editCat(d.id),
     formSalvar: () => { if (F.salvar(F.v)) { fechar(); toast('Salvo'); } },
@@ -978,6 +1114,7 @@ document.addEventListener('change', e => {
   if (d.fs && F) { F[d.fs] = Number(t.value); atualizarInfo(); }
   if (d.fi === 'data' && F?.k === 'lanc' && t.value) reabrir();
   if (t.id === 'fImport' && t.files?.[0]) lerImport(t.files[0]);
+  if (t.id === 'fExcel' && t.files?.[0]) lerExcel(t.files[0]);
   if (d.virada) { DB.saveCfg({ ...S.cfg, diaVirada: dia(t.value) }); toast('Salvo'); }
   if (d.sim === 'n') { UI.sim.n = Number(t.value); const sr = simResultado(); document.getElementById('simArea').innerHTML = sr.html + barras(CUR(), 11, sr.extra); }
   if (d.teto) { DB.saveCfg({ ...S.cfg, teto: { ...S.cfg.teto, [d.teto]: num(t.value) } }); toast('Teto atualizado'); }
