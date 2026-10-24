@@ -177,6 +177,9 @@ const parcCat = (id, i) => parcNoMes(i, p => p.cat === id);
 const catsDoMes = i => S.cfg.cats.filter(c => planCat(c.id, i) > 0 || gastoCat(c.id, i) > 0);
 const receitaPlan = i => mesDoc(i)?.receita ?? S.cfg.receita;
 const metaGuardar = i => mesDoc(i)?.guardarMeta ?? S.cfg.guardarMeta;
+const LIVRE = '__livre';
+/* dinheiro do mês que ainda não foi colocado em nenhuma categoria */
+function semCat(i) { const m = mesDoc(i); if (!m) return 0; return r2(m.receita - (m.guardarMeta || 0) - soma(m.fixas || []) - soma(Object.values(m.plan || {}), v => v)); }
 const entrou = i => soma(lancMes(i).filter(l => l.tipo === 'entrada'));
 const guardado = i => soma(lancMes(i).filter(l => l.tipo === 'guardar'));
 const fixasDoMes = i => mesDoc(i)?.fixas || S.cfg.fixas.map(f => ({ ...f, pago: false }));
@@ -243,7 +246,7 @@ function donut(itens, total) {
   return `<svg viewBox="0 0 150 150" width="150" height="150" role="img" aria-label="Gasto por categoria">
     <circle cx="75" cy="75" r="56" fill="none" stroke="#F1EDF0" stroke-width="22"/>${arcs}
     <circle cx="75" cy="75" r="67.5" fill="none" stroke="#3D3634" stroke-width="2"/><circle cx="75" cy="75" r="44.5" fill="none" stroke="#3D3634" stroke-width="2"/>
-    <text x="75" y="72" text-anchor="middle" font-family="Gaegu,cursive" font-weight="700" font-size="21" fill="#3D3634">${fmt0(total)}</text>
+    <text x="75" y="72" text-anchor="middle" font-family="Nunito,sans-serif" font-weight="800" font-size="17" fill="#3D3634">${fmt0(total)}</text>
     <text x="75" y="89" text-anchor="middle" font-family="Nunito,sans-serif" font-weight="700" font-size="10.5" fill="#8A7F7B">gasto no mês</text></svg>`;
 }
 function barras(de, qtd, extra) {
@@ -305,28 +308,97 @@ function tLogin() {
     </div></div>`;
 }
 
+/* ---------- tutorial de primeiro acesso ---------- */
+const PASSOS = ['nome', 'bancos', 'invest', 'cartoes', 'parc', 'fixas'];
+const SUGEST_INVEST = ['Tesouro Direto', 'Caixinha / Cofrinho', 'CDB', 'Poupança', 'Ações e fundos'];
+function draftOnb() {
+  const c = S.cfg;
+  return { nome: c.nome || '', contas: c.contas.filter(x => x.tipo === 'conta').map(x => ({ nome: x.nome, saldo: '' })),
+    temInvest: null, invest: [], cartoes: c.cartoes.map(x => ({ nome: x.nome, fecha: String(x.fecha), vence: String(x.vence) })),
+    temParc: null, parc: [], fixas: c.fixas.map(f => ({ nome: f.nome, valor: brl(f.valor), venc: String(f.venc), pago: null })) };
+}
+const getPath = (o, p) => p.split('.').reduce((a, k) => a?.[k], o);
+function setPath(o, p, v) { const ks = p.split('.'); const last = ks.pop(); ks.reduce((a, k) => a[k], o)[last] = v; }
+const NOVOS = { contas: () => ({ nome: '', saldo: '' }), invest: () => ({ nome: '', saldo: '' }), cartoes: () => ({ nome: '', fecha: '', vence: '' }),
+  parc: () => ({ desc: '', valor: '', n: '', atual: '', cartao: '0', cat: catsOrdenadas()[0]?.id || '' }), fixas: () => ({ nome: '', valor: '', venc: '', pago: null }) };
+function simNao(path, v) { return `<div class="sim-nao"><button class="btn ${v === true ? '' : 'sec'}" data-act="oSet" data-path="${path}" data-v="1">Sim</button><button class="btn ${v === false ? '' : 'sec'}" data-act="oSet" data-path="${path}" data-v="0">Não</button></div>`; }
+const oInp = (path, val, attrs = '') => `<input class="inp" data-o="${path}" value="${esc(val)}" ${attrs}>`;
+const oDel = (lista, k, min = 0) => (UI.O[lista].length > min ? `<button class="x" data-act="oDel" data-lista="${lista}" data-k="${k}">remover</button>` : '');
+
 function tOnboarding() {
-  const c = S.cfg; const p = UI.onb;
-  const barra = `<div class="step">${[0, 1, 2].map(i => `<i class="${i <= p ? 'on' : ''}"></i>`).join('')}<span>${p + 1}/3</span></div>`;
-  const telas = [
-    `<div class="login" style="min-height:auto;max-width:none"><div class="logo">${porquinho(96)}<b>Oi!</b><span>Vamos montar seu DinDin em 3 passinhos.</span></div>
-     <div class="field"><label for="oNome">Como posso te chamar?</label><input class="inp" id="oNome" data-cfg="nome" value="${esc(c.nome)}" autocomplete="given-name"></div></div>`,
-    `<h3 class="h-mes" style="font-size:32px">Quanto tem em cada conta hoje?</h3><p class="small muted b" style="margin:0">Pode ser aproximado. Dá para ajustar sempre que quiser em Ajustes.</p>
-     ${c.contas.map((ct, k) => `<div class="lin"><div class="nm">${esc(ct.nome)}<small>${esc(ct.sub || '')}</small></div><input class="inp sm" style="width:150px" inputmode="decimal" aria-label="Saldo ${esc(ct.nome)}" data-onbsaldo="${k}" value="${brl(ct.base)}"></div>`).join('')}
-     <p class="small muted b" style="margin:0">Outros bancos ou investimentos você adiciona depois em Ajustes.</p>`,
-    `<h3 class="h-mes" style="font-size:32px">Quando seus cartões fecham e vencem?</h3><p class="small muted b" style="margin:0">É isso que define em qual fatura cada compra cai. Confira no app do banco.</p>
-     ${c.cartoes.map((ct, k) => `<div class="lin"><div class="nm">${esc(ct.nome)}</div>
-       <label class="small muted b" for="of${k}">fecha</label><input class="inp sm" style="width:60px" id="of${k}" inputmode="numeric" data-onbcart="${k}" data-campo="fecha" value="${ct.fecha}">
-       <label class="small muted b" for="ov${k}">vence</label><input class="inp sm" style="width:60px" id="ov${k}" inputmode="numeric" data-onbcart="${k}" data-campo="vence" value="${ct.vence}"></div>`).join('')}`];
-  return `${S.demo ? '<div class="faixa">Modo demonstração · dados só neste aparelho</div>' : ''}<div class="stack">${barra}${telas[p]}
-    <div class="grid2">${p > 0 ? '<button class="btn sec" data-act="onbVolta">Voltar</button>' : '<span></span>'}<button class="btn" data-act="${p < 2 ? 'onbVai' : 'onbFim'}">${p < 2 ? 'Próximo' : 'Planejar meu mês'}</button></div></div>`;
+  const O = UI.O || (UI.O = draftOnb()); const p = UI.onb, N = PASSOS.length, mes = nomeMes(CUR()).toLowerCase();
+  const barra = `<div class="step">${PASSOS.map((_, k) => `<i class="${k <= p ? 'on' : ''}"></i>`).join('')}<span>${p + 1}/${N}</span></div>`;
+  let corpo = '';
+  switch (PASSOS[p]) {
+    case 'nome': corpo = `<div class="login" style="min-height:auto;max-width:none"><div class="logo">${porquinho(96)}<b>Oi!</b><span>Vamos montar seu DinDin. Leva uns 3 minutinhos.</span></div>
+      <div class="field"><label for="oNome">Como posso te chamar?</label>${oInp('nome', O.nome, 'id="oNome" autocomplete="given-name"')}</div></div>`; break;
+    case 'bancos': corpo = `<h3>Quanto tem em cada banco agora?</h3><p class="ajuda">Olhe o saldo no app de cada banco. Pode ser aproximado.</p>
+      ${O.contas.map((c, k) => `<div class="item"><div class="row"><span class="mini">Banco ${k + 1}</span>${oDel('contas', k, 1)}</div>
+        <div class="grid2">${oInp(`contas.${k}.nome`, c.nome, 'placeholder="Nome do banco" aria-label="Nome do banco"')}${oInp(`contas.${k}.saldo`, c.saldo, 'inputmode="decimal" placeholder="Saldo R$" aria-label="Saldo"')}</div></div>`).join('')}
+      <button class="add" data-act="oAdd" data-lista="contas">+ Adicionar outro banco</button>`; break;
+    case 'invest': corpo = `<h3>Você tem dinheiro investido?</h3><p class="ajuda">É para onde vai o que você guarda todo mês.</p>${simNao('temInvest', O.temInvest)}
+      ${O.temInvest ? `<div class="field"><span class="lbl">Onde? Toque para adicionar</span><div class="chips">${SUGEST_INVEST.map(n => `<button class="chip" data-act="oAdd" data-lista="invest" data-nome="${esc(n)}">+ ${esc(n)}</button>`).join('')}</div></div>
+        ${O.invest.map((c, k) => `<div class="item"><div class="row"><span class="mini">Investimento ${k + 1}</span>${oDel('invest', k)}</div>
+          <div class="grid2">${oInp(`invest.${k}.nome`, c.nome, 'placeholder="Onde está" aria-label="Onde está"')}${oInp(`invest.${k}.saldo`, c.saldo, 'inputmode="decimal" placeholder="Valor R$" aria-label="Valor"')}</div></div>`).join('')}
+        <button class="add" data-act="oAdd" data-lista="invest">+ Outro investimento</button>` : ''}`; break;
+    case 'cartoes': corpo = `<h3>Seus cartões de crédito</h3><p class="ajuda">O dia em que a fatura fecha e o dia em que vence. Está no app do banco. É isso que diz em qual fatura cada compra cai.</p>
+      ${O.cartoes.map((c, k) => `<div class="item"><div class="row"><span class="mini">Cartão ${k + 1}</span>${oDel('cartoes', k)}</div>${oInp(`cartoes.${k}.nome`, c.nome, 'placeholder="Nome do cartão" aria-label="Nome do cartão"')}
+        <div class="grid2"><div class="field"><span class="mini">Fecha dia</span>${oInp(`cartoes.${k}.fecha`, c.fecha, 'inputmode="numeric" aria-label="Dia que fecha"')}</div><div class="field"><span class="mini">Vence dia</span>${oInp(`cartoes.${k}.vence`, c.vence, 'inputmode="numeric" aria-label="Dia que vence"')}</div></div></div>`).join('')}
+      <button class="add" data-act="oAdd" data-lista="cartoes">+ Adicionar cartão</button>`; break;
+    case 'parc': corpo = `<h3>Tem compras parceladas rolando?</h3><p class="ajuda">Ex.: um tênis em 5x de R$ 80, e em ${mes} vence a 2ª parcela.</p>${O.cartoes.length ? simNao('temParc', O.temParc) : '<div class="res">Sem cartão cadastrado, pode pular.</div>'}
+      ${O.temParc && O.cartoes.length ? O.parc.map((c, k) => `<div class="item"><div class="row"><span class="mini">Compra ${k + 1}</span>${oDel('parc', k)}</div>${oInp(`parc.${k}.desc`, c.desc, 'placeholder="O que foi" aria-label="O que foi"')}
+          <div class="grid2"><div class="field"><span class="mini">Valor da parcela</span>${oInp(`parc.${k}.valor`, c.valor, 'inputmode="decimal" placeholder="R$" aria-label="Valor da parcela"')}</div><div class="field"><span class="mini">Total de parcelas</span>${oInp(`parc.${k}.n`, c.n, 'inputmode="numeric" placeholder="ex.: 10" aria-label="Total de parcelas"')}</div></div>
+          <div class="field"><span class="mini">Qual parcela vence em ${mes}?</span>${oInp(`parc.${k}.atual`, c.atual, 'inputmode="numeric" placeholder="ex.: 3" aria-label="Parcela deste mês"')}</div>
+          <div class="grid2"><div class="field"><span class="mini">Cartão</span><select class="inp" data-o="parc.${k}.cartao" aria-label="Cartão">${O.cartoes.map((x, j) => `<option value="${j}" ${String(j) === String(c.cartao) ? 'selected' : ''}>${esc(x.nome || 'Cartão ' + (j + 1))}</option>`).join('')}</select></div>
+          <div class="field"><span class="mini">Categoria</span><select class="inp" data-o="parc.${k}.cat" aria-label="Categoria">${S.cfg.cats.filter(x => x.ativa).map(x => `<option value="${x.id}" ${x.id === c.cat ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div></div></div>`).join('')
+        + '<button class="add" data-act="oAdd" data-lista="parc">+ Adicionar compra parcelada</button>' : ''}`; break;
+    case 'fixas': corpo = `<h3>Suas contas fixas</h3><p class="ajuda">As que vêm todo mês com valor parecido: aluguel, internet, academia...</p>
+      ${O.fixas.map((c, k) => `<div class="item"><div class="row"><span class="mini">Conta ${k + 1}</span>${oDel('fixas', k)}</div>${oInp(`fixas.${k}.nome`, c.nome, 'placeholder="Nome" aria-label="Nome da conta"')}
+        <div class="grid2"><div class="field"><span class="mini">Valor</span>${oInp(`fixas.${k}.valor`, c.valor, 'inputmode="decimal" aria-label="Valor"')}</div><div class="field"><span class="mini">Vence dia</span>${oInp(`fixas.${k}.venc`, c.venc, 'inputmode="numeric" aria-label="Dia do vencimento"')}</div></div>
+        <div class="row"><span class="small b">Já pagou em ${mes}?</span><div class="seg" style="--n:2;width:140px"><button data-act="oSet" data-path="fixas.${k}.pago" data-v="1" aria-pressed="${c.pago === true}">Sim</button><button data-act="oSet" data-path="fixas.${k}.pago" data-v="0" aria-pressed="${c.pago === false}">Não</button></div></div></div>`).join('')}
+      <button class="add" data-act="oAdd" data-lista="fixas">+ Adicionar conta fixa</button>`; break;
+  }
+  return `${S.demo ? '<div class="faixa">Modo demonstração · dados só neste aparelho</div>' : ''}<div class="stack onb">${barra}${corpo}
+    <div class="grid2">${p > 0 ? '<button class="btn sec" data-act="onbVolta">Voltar</button>' : '<span></span>'}<button class="btn" data-act="${p < N - 1 ? 'onbVai' : 'onbFim'}">${p < N - 1 ? 'Próximo' : 'Concluir'}</button></div></div>`;
+}
+function onbValida() {
+  const O = UI.O, passo = PASSOS[UI.onb];
+  if (passo === 'bancos' && !O.contas.some(c => c.nome.trim())) return 'Cadastre pelo menos um banco';
+  if (passo === 'invest' && O.temInvest == null) return 'Responda sim ou não';
+  if (passo === 'cartoes' && O.cartoes.some(c => c.nome.trim() && (!parseInt(c.fecha) || !parseInt(c.vence)))) return 'Preencha os dias de fechamento e vencimento';
+  if (passo === 'parc' && O.cartoes.length && O.temParc == null) return 'Responda sim ou não';
+  if (passo === 'parc' && O.temParc) for (const c of O.parc) {
+    const n = parseInt(c.n), a = parseInt(c.atual);
+    if (num(c.valor) <= 0 || !n || !a || a > n) return 'Confira valor, total de parcelas e a parcela deste mês';
+  }
+  return '';
+}
+function onbConcluir() {
+  const O = UI.O, ts = Date.now(), i = CUR();
+  const mk = n => slug(n) + '-' + novoId().slice(-4);
+  const contas = O.contas.filter(c => c.nome.trim()).map(c => ({ id: mk(c.nome), nome: c.nome.trim(), sub: 'conta', tipo: 'conta', base: num(c.saldo), baseTs: ts }));
+  if (O.temInvest) O.invest.filter(c => c.nome.trim()).forEach(c => contas.push({ id: mk(c.nome), nome: c.nome.trim(), sub: 'investimento', tipo: 'invest', base: num(c.saldo), baseTs: ts }));
+  const contaPadrao = contas[0].id;
+  const cartoes = O.cartoes.map((c, k) => ({ k, c })).filter(x => x.c.nome.trim()).map(({ k, c }) => ({ k, id: mk(c.nome), nome: c.nome.trim(), fecha: dia(c.fecha), vence: dia(c.vence), conta: contaPadrao }));
+  const fixas = O.fixas.filter(f => f.nome.trim()).map(f => ({ id: mk(f.nome), nome: f.nome.trim(), valor: num(f.valor), venc: dia(f.venc), meio: contaPadrao, _pago: f.pago === true }));
+  const cfg = { ...S.cfg, nome: O.nome.trim(), contas, cartoes: cartoes.map(({ k, ...c }) => c), fixas: fixas.map(({ _pago, ...f }) => f), contaPadrao, setup: true };
+  // já pagas antes de começar: marcadas com pagoTs 0 para não descontar de novo do saldo informado
+  const mes = { receita: cfg.receita, guardarMeta: cfg.guardarMeta, plan: {}, criado: ts, fixas: fixas.map(({ _pago, ...f }) => ({ ...f, pago: _pago, ...(_pago ? { pagoTs: 0 } : {}) })) };
+  S.cfg = cfg; S.meses[keyOf(i)] = mes;
+  DB.saveCfg(cfg); DB.saveMes(keyOf(i), mes);
+  if (O.temParc) O.parc.forEach(c => {
+    const card = cartoes.find(x => String(x.k) === String(c.cartao)) || cartoes[0]; if (!card) return;
+    DB.addParc({ desc: c.desc.trim() || cat(c.cat).nome, cat: c.cat, cartao: card.id, parcela: num(c.valor), n: parseInt(c.n), primeira: i - (parseInt(c.atual) - 1), data: isoHoje(), criado: ts });
+  });
+  UI.O = null; UI.onb = 0; UI.tab = 'inicio'; UI.mes = i; render(); setTimeout(abrirWizard, 200);
 }
 
 function tInicio() {
   const i = UI.mes, ehAtual = i === CUR(), doc = mesDoc(i);
   const cats = catsDoMes(i).map(c => ({ ...c, g: gastoCat(c.id, i), p: planCat(c.id, i) }));
-  const plan = soma(cats, c => c.p), gasto = soma(cats, c => c.g), sobra = plan - gasto;
-  const g = guardado(i), meta = metaGuardar(i);
+  const plan = soma(cats, c => c.p), gasto = soma(cats, c => c.g);
+  const g = guardado(i), meta = metaGuardar(i), livreCat = semCat(i);
+  const sobra = r2(plan - gasto + Math.max(0, livreCat) - Math.max(0, g - meta));
   const fixas = fixasDoMes(i);
   const avisos = ehAtual ? cats.filter(c => c.p > 0 && (c.g > c.p + .005 || (c.g / c.p >= .85 && c.g < c.p - .005))).map(c => c.g > c.p
     ? `<div class="aviso" style="--av:var(--rosa-cl)"><p><b>${esc(c.nome)}</b> passou ${fmt(c.g - c.p)} do planejado.</p><button class="link" data-act="mover" data-para="${c.id}" data-valor="${r2(c.g - c.p)}">Cobrir com outra categoria</button></div>`
@@ -339,7 +411,8 @@ function tInicio() {
     ${!doc ? `<div class="aviso" style="--av:var(--azul-cl)"><p><b>${nomeMes(i)}</b> ainda não foi planejado.</p><button class="link" data-act="wizard">Planejar agora</button></div>` : ''}
     <section class="card" style="--hd:var(--salvia);--sombra:var(--salvia)"><div class="card-h"><h2>Livre para gastar</h2>${doc ? '<button class="link" data-act="wizard">Replanejar</button>' : ''}</div>
       <div class="card-b"><div class="big num" style="color:${sobra < 0 ? 'var(--estouro)' : 'var(--tinta)'}">${fmt(sobra)}</div>
-      <div class="muted small b">de ${fmt(plan)} planejados para os gastos variáveis</div>
+      <div class="muted small b">${fmt(Math.max(0, plan - gasto))} nas categorias${livreCat > 0.005 ? ` · ${fmt(livreCat)} ainda sem categoria` : ''}${g > meta + .005 ? ` · ${fmt(g - meta)} guardados além da meta` : ''}</div>
+      ${livreCat > 0.005 && ehAtual ? `<button class="link" style="margin-top:4px" data-act="mover" data-de="${LIVRE}">Colocar o valor sem categoria em alguma categoria</button>` : ''}
       <div class="kpis"><div class="kpi" style="--k:var(--rosa-cl)"><span>Entrou</span><b class="num">${fmt(entrou(i))}</b><small>plano ${fmt0(receitaPlan(i))}</small></div>
       <div class="kpi" style="--k:var(--lilas-cl)"><span>Fixas</span><b class="num">${fmt(soma(fixas))}</b><small>${fixas.filter(f => f.pago).length}/${fixas.length} pagas</small></div>
       <div class="kpi" style="--k:var(--pessego-cl)"><span>Guardado</span><b class="num">${fmt(g)}</b><small>meta ${fmt0(meta)}</small></div></div></div></section>
@@ -347,8 +420,8 @@ function tInicio() {
     ${atrasadas.length ? `<div class="aviso" style="--av:var(--lilas-cl)"><p>${atrasadas.map(f => `<b>${esc(f.nome)}</b> venceu dia ${f.venc}`).join(', ')} e ainda não ${atrasadas.length > 1 ? 'estão marcadas como pagas' : 'está marcada como paga'}.</p></div>` : ''}
     ${meta > 0 ? `<section class="card" style="--hd:var(--pessego);--sombra:var(--pessego)"><div class="card-h"><h2>Meta de guardar</h2><span class="small b">${Math.round(g / meta * 100)}%</span></div>
       <div class="card-b stack" style="gap:8px"><div class="track"><div class="fill ${g >= meta ? 'full' : g <= 0 ? 'zero' : ''}" style="--c:var(--pessego);width:${Math.min(100, g / meta * 100)}%"></div></div>
-      <div class="row small b"><span>${fmt(g)} guardados</span><span class="muted">${g >= meta ? 'meta batida!' : 'faltam ' + fmt(meta - g)}</span></div>
-      ${ehAtual && g < meta ? `<button class="link" style="align-self:flex-start" data-act="lancar" data-tipo="guardar">Registrar que guardei</button>` : ''}</div></section>` : ''}
+      <div class="row small b"><span>${fmt(g)} guardados</span><span class="muted">${g > meta + .005 ? `meta batida + ${fmt(g - meta)}` : g >= meta - .005 ? 'meta batida!' : 'faltam ' + fmt(meta - g)}</span></div>
+      ${ehAtual ? `<button class="link" style="align-self:flex-start" data-act="lancar" data-tipo="guardar">${g >= meta - .005 ? 'Guardar mais' : 'Registrar que guardei'}</button>` : ''}</div></section>` : ''}
     <section class="card" style="--hd:var(--azul);--sombra:var(--azul)"><div class="card-h"><h2>Gastos variáveis</h2>${doc ? '<button class="link" data-act="mover">Mover valor</button>' : ''}</div>
       <div class="card-b">${cats.length ? `<div class="donut-wrap">${donut(ordem.map(c => ({ v: c.g, c: c.c })), gasto)}
         <div class="legend">${gasto > 0 ? ordem.filter(c => c.g > 0).sort((a, b) => b.g - a.g).slice(0, 7).map(c => `<div><i class="dot" style="--c:${c.c}"></i>${esc(c.nome)}<span class="v">${fmt0(c.g)} · ${Math.round(c.g / gasto * 100)}%</span></div>`).join('') : '<span class="muted">Nenhum gasto ainda.</span>'}</div></div>
@@ -553,11 +626,13 @@ function salvarLanc() {
 
 /* --- mover entre categorias --- */
 function folhaMover() {
-  const i = CUR(); const livre = id => planCat(id, i) - gastoCat(id, i);
+  const i = CUR(); const livre = id => id === LIVRE ? semCat(i) : planCat(id, i) - gastoCat(id, i);
   const cats = S.cfg.cats.filter(c => c.ativa);
-  abrir(`<h3>Mover entre categorias</h3><p class="small muted b" style="margin:0">Tira do planejado de uma categoria e põe em outra. O total do mês não muda.</p>
-    <div class="field"><span class="lbl">Tirar de</span><div class="chips">${cats.filter(c => livre(c.id) > 0).map(c => `<button class="chip" data-f="de" data-v="${c.id}" aria-pressed="${F.de === c.id}"><i class="dot" style="--c:${c.c}"></i>${esc(c.nome)} · ${fmt0(livre(c.id))}</button>`).join('') || '<span class="muted b">Nenhuma categoria com saldo livre.</span>'}</div></div>
-    <div class="field"><span class="lbl">Colocar em</span><div class="chips">${(F.todas ? cats : catsDoMes(i).filter(c => c.ativa).concat(F.para && !catsDoMes(i).some(c => c.id === F.para) ? [cat(F.para)] : [])).map(c => `<button class="chip" data-f="para" data-v="${c.id}" aria-pressed="${F.para === c.id}"><i class="dot" style="--c:${c.c}"></i>${esc(c.nome)}</button>`).join('')}${F.todas ? '' : '<button class="chip mais" data-f="todas" data-v="1">+ outras</button>'}</div></div>
+  const chipLivre = campo => `<button class="chip" data-f="${campo}" data-v="${LIVRE}" aria-pressed="${F[campo] === LIVRE}"><i class="dot" style="--c:#FFFFFF"></i>Sem categoria${campo === 'de' ? ' · ' + fmt0(semCat(i)) : ''}</button>`;
+  const destinos = F.todas ? cats : catsDoMes(i).filter(c => c.ativa).concat(F.para && F.para !== LIVRE && !catsDoMes(i).some(c => c.id === F.para) ? [cat(F.para)] : []);
+  abrir(`<h3>Mover valor</h3><p class="small muted b" style="margin:0">Tira do planejado de um lugar e põe em outro. O total do mês não muda.</p>
+    <div class="field"><span class="lbl">Tirar de</span><div class="chips">${semCat(i) > .005 ? chipLivre('de') : ''}${cats.filter(c => livre(c.id) > 0).map(c => `<button class="chip" data-f="de" data-v="${c.id}" aria-pressed="${F.de === c.id}"><i class="dot" style="--c:${c.c}"></i>${esc(c.nome)} · ${fmt0(livre(c.id))}</button>`).join('')}</div></div>
+    <div class="field"><span class="lbl">Colocar em</span><div class="chips">${destinos.map(c => `<button class="chip" data-f="para" data-v="${c.id}" aria-pressed="${F.para === c.id}"><i class="dot" style="--c:${c.c}"></i>${esc(c.nome)}</button>`).join('')}${chipLivre('para')}${F.todas ? '' : '<button class="chip mais" data-f="todas" data-v="1">+ outras</button>'}</div></div>
     <input class="inp inp-big" inputmode="decimal" placeholder="R$ 0,00" aria-label="Valor a mover" data-fi="valor" value="${esc(F.valor)}">
     <button class="btn" data-act="salvarMover">Mover</button>`);
 }
@@ -573,8 +648,8 @@ function restoWiz() {
   const disp = num(F.receita) - num(F.guardar) - soma(F.fixas, f => num(f.valor));
   return r2(disp - soma(Object.values(F.plan), v => num(v)));
 }
-function htmlResto() { const r = restoWiz(); return Math.abs(r) < .01 ? '<b>Tudo distribuído.</b>' : r > 0 ? `Falta distribuir <b>${fmt(r)}</b>` : `Passou <b>${fmt(-r)}</b> do disponível`; }
-function corResto() { const r = restoWiz(); return Math.abs(r) < .01 ? 'var(--salvia-cl)' : r < 0 ? 'var(--rosa-cl)' : 'var(--amarelo-cl)'; }
+function htmlResto() { const r = restoWiz(); return Math.abs(r) < .01 ? '<b>Tudo distribuído.</b>' : r > 0 ? `<b>${fmt(r)} ficam sem categoria.</b> Pode deixar assim e colocar onde quiser ao longo do mês.` : `Passou <b>${fmt(-r)}</b> do que você tem para o mês.`; }
+function corResto() { const r = restoWiz(); return r < -.005 ? 'var(--rosa-cl)' : 'var(--salvia-cl)'; }
 function folhaWizard() {
   const i = F.i;
   const barra = `<div class="step">${[0, 1, 2, 3].map(k => `<i class="${k <= F.p ? 'on' : ''}"></i>`).join('')}<span>${F.p + 1}/4</span></div>`;
@@ -617,7 +692,7 @@ function folhaParc() {
     <div class="grid2"><div class="field"><label for="pVal">Valor da parcela</label><input class="inp" id="pVal" inputmode="decimal" data-fi="valor" value="${esc(F.valor)}" placeholder="R$ 0,00"></div>
     <div class="field"><label for="pN">Total de parcelas</label><input class="inp" id="pN" inputmode="numeric" data-fi="n" value="${esc(F.n)}"></div></div>
     <div class="field"><span class="lbl">Cartão</span><div class="chips">${S.cfg.cartoes.map(x => `<button class="chip" data-f="cartao" data-v="${x.id}" aria-pressed="${F.cartao === x.id}">${esc(x.nome)}</button>`).join('')}</div></div>
-    <div class="field"><label for="pAt">Na fatura de ${lab(aberta)} vem a parcela nº</label><input class="inp" id="pAt" inputmode="numeric" data-fi="atual" value="${esc(F.atual)}"></div>
+    <div class="field"><label for="pAt">Qual parcela vence em ${nomeMes(CUR()).toLowerCase()}?</label><input class="inp" id="pAt" inputmode="numeric" data-fi="atual" value="${esc(F.atual)}"></div>
     <div class="field"><span class="lbl">Categoria</span><div class="chips">${(F.todas ? catsOrdenadas() : catsOrdenadas().slice(0, 9)).map(k => `<button class="chip" data-f="cat" data-v="${k.id}" aria-pressed="${F.cat === k.id}"><i class="dot" style="--c:${k.c}"></i>${esc(k.nome)}</button>`).join('')}${F.todas ? '' : '<button class="chip mais" data-f="todas" data-v="1">+ categorias</button>'}</div></div>
     <button class="btn" data-act="salvarParc">Salvar</button>`);
 }
@@ -733,13 +808,15 @@ document.addEventListener('click', e => {
       const fixas = m.fixas.map(f => f.id === d.id ? (f.pago ? (({ pagoTs, ...r }) => ({ ...r, pago: false }))(f) : { ...f, pago: true, pagoTs: Date.now() }) : f);
       DB.saveMes(k, { ...m, fixas }); },
     mover: () => { const i = CUR(); const livre = id => planCat(id, i) - gastoCat(id, i);
-      const de = S.cfg.cats.filter(c => c.id !== d.para && livre(c.id) > 0).sort((a, b) => livre(b.id) - livre(a.id))[0];
-      F = { k: 'mover', de: de?.id, para: d.para || catsDoMes(i)[0]?.id, valor: d.valor ? brl(Number(d.valor)) : '', todas: false }; folhaMover(); },
+      const maior = S.cfg.cats.filter(c => c.id !== d.para && livre(c.id) > 0).sort((a, b) => livre(b.id) - livre(a.id))[0];
+      const de = d.de || (semCat(i) > .005 ? LIVRE : maior?.id);
+      F = { k: 'mover', de, para: d.para || catsDoMes(i).find(c => c.id !== de)?.id, valor: d.valor ? brl(Number(d.valor)) : '', todas: false }; folhaMover(); },
     salvarMover: () => { const v = num(F.valor), i = CUR(); if (v <= 0 || !F.de || !F.para || F.de === F.para) { toast('Escolha o valor e duas categorias diferentes'); return; }
       const m = mesDoc(i); if (!m) { toast('Planeje o mês primeiro'); return; }
-      const plan = { ...m.plan }; plan[F.de] = r2((plan[F.de] || 0) - v); plan[F.para] = r2((plan[F.para] || 0) + v);
-      if (plan[F.de] <= 0) delete plan[F.de];
-      DB.saveMes(keyOf(i), { ...m, plan }); const n = cat(F.para).nome; fechar(); toast(`${fmt(v)} movidos para ${n}`); },
+      const plan = { ...m.plan };
+      if (F.de !== LIVRE) { plan[F.de] = r2((plan[F.de] || 0) - v); if (plan[F.de] <= 0) delete plan[F.de]; }
+      if (F.para !== LIVRE) plan[F.para] = r2((plan[F.para] || 0) + v);
+      DB.saveMes(keyOf(i), { ...m, plan }); const n = F.para === LIVRE ? 'sem categoria' : cat(F.para).nome; fechar(); toast(`${fmt(v)} movidos para ${n}`); },
     wizard: () => abrirWizard(),
     wizVai: () => { F.p++; folhaWizard(); }, wizVolta: () => { F.p--; folhaWizard(); }, wizFim: salvarWizard,
     simCartao: () => { UI.sim.cartao = d.v; render(); },
@@ -758,8 +835,7 @@ document.addEventListener('click', e => {
     apagarParc: () => { DB.delParc(F.id); fechar(); toast('Compra parcelada apagada'); },
     salvarParc: () => { const v = num(F.valor), n = parseInt(F.n), at = parseInt(F.atual); const c = cartao(F.cartao);
       if (v <= 0 || !n || n < 1 || !at || at < 1 || at > n || !c) { toast('Confira valor, total de parcelas e a parcela atual'); return; }
-      const aberta = faturaDe(c, CUR(), DIA());
-      DB.addParc({ desc: F.desc.trim() || cat(F.cat).nome, cat: F.cat, cartao: c.id, parcela: v, n, primeira: aberta - (at - 1), data: isoHoje(), criado: Date.now() });
+      DB.addParc({ desc: F.desc.trim() || cat(F.cat).nome, cat: F.cat, cartao: c.id, parcela: v, n, primeira: CUR() - (at - 1), data: isoHoje(), criado: Date.now() });
       fechar(); toast('Parcela cadastrada'); },
     editConta: () => editConta(d.id), editCartao: () => editCartao(d.id), editFixa: () => editFixa(d.id), editCat: () => editCat(d.id),
     formSalvar: () => { if (F.salvar(F.v)) { fechar(); toast('Salvo'); } },
@@ -768,8 +844,13 @@ document.addEventListener('click', e => {
       const u = URL.createObjectURL(blob); const lk = document.createElement('a'); lk.href = u; lk.download = `dindin-backup-${isoHoje()}.json`; document.body.appendChild(lk); lk.click(); lk.remove(); setTimeout(() => URL.revokeObjectURL(u), 3000); },
     sair: () => DB.sair(),
     lModo: () => { UI.login = { modo: d.v, erro: '', msg: '' }; render(); },
-    onbVai: () => { UI.onb++; render(); }, onbVolta: () => { UI.onb--; render(); },
-    onbFim: () => { DB.saveCfg({ ...S.cfg, setup: true }); UI.tab = 'inicio'; UI.mes = CUR(); setTimeout(abrirWizard, 150); }
+    onbVai: () => { const e = onbValida(); if (e) { toast(e); return; } UI.onb++; render(); window.scrollTo(0, 0); },
+    onbVolta: () => { UI.onb--; render(); window.scrollTo(0, 0); },
+    onbFim: () => { const e = onbValida(); if (e) { toast(e); return; } onbConcluir(); },
+    oSet: () => { const v = d.v === '1'; setPath(UI.O, d.path, v); if (d.path === 'temInvest' && v && !UI.O.invest.length) UI.O.invest.push(NOVOS.invest());
+      if (d.path === 'temParc' && v && !UI.O.parc.length) UI.O.parc.push(NOVOS.parc()); render(); },
+    oAdd: () => { const it = NOVOS[d.lista](); if (d.nome) { const vazio = UI.O[d.lista].find(x => !x.nome); if (vazio) { vazio.nome = d.nome; render(); return; } it.nome = d.nome; } UI.O[d.lista].push(it); render(); },
+    oDel: () => { UI.O[d.lista].splice(+d.k, 1); render(); }
   };
   if (acoes[a]) acoes[a]();
 });
@@ -778,6 +859,7 @@ document.addEventListener('input', e => {
   const t = e.target, d = t.dataset;
   if (d.fi && F) { F[d.fi] = t.value; if (F.k === 'lanc') atualizarInfo(); if (F.k === 'wiz') { const r = document.getElementById('resto'); if (r) { r.innerHTML = htmlResto(); r.style.setProperty('--r', corResto()); } } }
   if (d.fvIn && F) F.v[d.fvIn] = t.value;
+  if (d.o && UI.O) setPath(UI.O, d.o, t.value);
   if (d.plan && F) { F.plan[d.plan] = t.value; const r = document.getElementById('resto'); if (r) { r.innerHTML = htmlResto(); r.style.setProperty('--r', corResto()); } }
   if (d.wfixa && F) { F.fixas[+d.wfixa].valor = t.value; const el = document.getElementById('totFixas'); if (el) el.textContent = fmt(soma(F.fixas, f => num(f.valor))); }
   if (d.sim === 'total') { UI.sim.total = t.value; const sr = simResultado(); document.getElementById('simArea').innerHTML = sr.html + barras(CUR(), 11, sr.extra); }
@@ -788,8 +870,7 @@ document.addEventListener('change', e => {
   if (d.sim === 'n') { UI.sim.n = Number(t.value); const sr = simResultado(); document.getElementById('simArea').innerHTML = sr.html + barras(CUR(), 11, sr.extra); }
   if (d.teto) { DB.saveCfg({ ...S.cfg, teto: { ...S.cfg.teto, [d.teto]: num(t.value) } }); toast('Teto atualizado'); }
   if (d.cfg) { S.cfg[d.cfg] = t.value.trim(); DB.saveCfg({ ...S.cfg }); }
-  if (d.onbsaldo) { const k = +d.onbsaldo; const contas = S.cfg.contas.map((c, j) => j === k ? { ...c, base: num(t.value), baseTs: Date.now() } : c); S.cfg = { ...S.cfg, contas }; DB.saveCfg(S.cfg); }
-  if (d.onbcart) { const k = +d.onbcart; const cartoes = S.cfg.cartoes.map((c, j) => j === k ? { ...c, [d.campo]: dia(t.value) } : c); S.cfg = { ...S.cfg, cartoes }; DB.saveCfg(S.cfg); }
+  if (d.o && UI.O) setPath(UI.O, d.o, t.value);
 });
 document.addEventListener('submit', async e => {
   if (e.target.id !== 'formLogin') return; e.preventDefault();
